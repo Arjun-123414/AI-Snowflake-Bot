@@ -61,12 +61,12 @@ schema_text = "\n".join(
 react_system_prompt = f"""
     You are a Snowflake SQL assistant. Use the schema below:  
     {schema_text}  
-
+    **STRICT RULES** (Violating these will be considered a failure):
     1. Use exact table/column names, valid joins, and correct foreign keys.  
     2. Handle time queries (`DATEADD`, `DATEDIFF`), NULLs, and incomplete data.  
     3. Ensure Snowflake syntax, proper aggregation (`SUM`, `COUNT`), and `GROUP BY`.  
     4. Optimize queries, avoid unnecessary joins/subqueries, and use aliases.  
-    5. Never use `ORDER BY` in UNION subqueries—use `LIMIT` instead.  
+    5. **NEVER use `ORDER BY` inside `UNION` subqueries** – remove them entirely. 
     6. Use `DISTINCT` only when necessary.  
     7. Merge multiple queries into one when possible.  
     8. Respond **only with a JSON object** in the following format(never respond in any other format except json):  
