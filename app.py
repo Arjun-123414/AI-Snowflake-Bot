@@ -9,7 +9,6 @@ from groq_utils import get_groq_response
 from action_utils import parse_action_response, execute_action
 import streamlit as st
 from PIL import Image
-from auth import login_form  # Import the login form from auth.py
 
 # Load environment variables
 load_dotenv()
@@ -22,18 +21,49 @@ st.set_page_config(
 )
 
 
-# Custom CSS for styling
-def local_css(file_name):
-    with open(file_name) as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+# Connect to Snowflake
+def get_snowflake_connection():
+    return create_engine(URL(
+        account=os.getenv("SNOWFLAKE_ACCOUNT"),
+        user=os.getenv("SNOWFLAKE_USER"),
+        password=os.getenv("SNOWFLAKE_PASSWORD"),
+        database=os.getenv("SNOWFLAKE_DATABASE"),
+        schema=os.getenv("SNOWFLAKE_SCHEMA"),
+        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+        role=os.getenv("SNOWFLAKE_ROLE")
+    ))
 
 
-local_css("style.css")
+# Authenticate user
+def authenticate_user(email, password):
+    if not email.endswith("@ahs.com"):
+        return False  # Restrict access to emails ending with @ahc.com
+
+    engine = get_snowflake_connection()
+    with engine.connect() as conn:
+        query = text("SELECT COUNT(*) FROM UandP WHERE username = :email AND password = :password")
+        result = conn.execute(query, {"email": email, "password": password}).fetchone()
+        return result[0] > 0  # Returns True if user exists, False otherwise
 
 
-# Main app content
+# Login Page
+def login_page():
+    st.title("🔐 Login to Snowflake Assistant")
+
+    email = st.text_input("Email", placeholder="Enter your email")
+    password = st.text_input("Password", type="password", placeholder="Enter your password")
+
+    if st.button("Login"):
+        if authenticate_user(email, password):
+            st.session_state["authenticated"] = True
+            st.session_state["user"] = email
+            st.rerun()
+        else:
+            st.error("Invalid credentials! Please try again.")
+
+
+# Main Application
 def main_app():
-    # Sidebar with logo and info
     with st.sidebar:
         logo = Image.open("logo.png")  # Replace with your logo (500x500px)
         st.image(logo, width=200)
@@ -65,12 +95,12 @@ def main_app():
     react_system_prompt = f"""
         You are a Snowflake SQL assistant. Use the schema below:  
         {schema_text}  
-
+        **STRICT RULES** (Violating these will be considered a failure):
         1. Use exact table/column names, valid joins, and correct foreign keys.  
         2. Handle time queries (`DATEADD`, `DATEDIFF`), NULLs, and incomplete data.  
         3. Ensure Snowflake syntax, proper aggregation (`SUM`, `COUNT`), and `GROUP BY`.  
         4. Optimize queries, avoid unnecessary joins/subqueries, and use aliases.  
-        5. Never use `ORDER BY` in UNION subqueries—use `LIMIT` instead.  
+        5. **NEVER use `ORDER BY` inside `UNION` subqueries** – remove them entirely.
         6. Use `DISTINCT` only when necessary.  
         7. Merge multiple queries into one when possible.  
         8. Respond **only with a JSON object** in the following format(never respond in any other format except json):  
@@ -211,7 +241,7 @@ def main_app():
 
                 # Generate natural language response (Second Call)
                 natural_response, token_usage_second_call = get_groq_response(
-                    f"User: {prompt}. Result: {result}.Summarize concisely without assumptions. Use chat history for follow-ups; if unclear, infer the last mentioned entity/metric. Exclude SQL and JSON.",
+                    f"User: {prompt}. Result: {result}. Summarize concisely without assumptions. Use chat history for follow-ups; if unclear, infer the last mentioned entity/metric. Exclude SQL and JSON.",
                     st.session_state.messages
                 )
                 st.session_state.total_tokens += token_usage_second_call
@@ -233,8 +263,21 @@ def main_app():
                 st.session_state.chat_history.append({"role": "assistant", "content": natural_response})
 
             except Exception as e:
+                # Save error details
+                save_query_result(
+                    prompt,
+                    None,  # No natural language response
+                    None,  # No result
+                    sql_query if 'sql_query' in locals() else None,  # SQL query if available
+                    response_text if 'response_text' in locals() else str(e),  # Raw response or error message
+                    tokens_first_call=token_usage_first_call if 'token_usage_first_call' in locals() else None,
+                    tokens_second_call=None,  # No second call tokens
+                    total_tokens_used=st.session_state.total_tokens,
+                    error_message=str(e)  # Save the error message
+                )
+
+                # Display error message
                 natural_response = f"Error: {str(e)}"
-                save_query_result(prompt, None, None, None, str(e))
                 st.session_state.messages.append({"role": "assistant", "content": natural_response})
                 st.session_state.chat_history.append({"role": "assistant", "content": natural_response})
 
@@ -249,11 +292,11 @@ def main_app():
         st.sidebar.success("Sync completed!")
 
 
-# Check if user is logged in
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
+# Run the App
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
 
-if not st.session_state.logged_in:
-    login_form()  # Use the login form from auth.py
-else:
+if st.session_state["authenticated"]:
     main_app()
+else:
+    login_page()
