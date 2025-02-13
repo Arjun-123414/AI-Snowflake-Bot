@@ -20,7 +20,12 @@ st.set_page_config(
     layout="wide"
 )
 
+# Custom CSS for styling
+def local_css(file_name):
+    with open(file_name) as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
+local_css("style.css")
 # Connect to Snowflake
 def get_snowflake_connection():
     return create_engine(URL(
@@ -100,7 +105,7 @@ def main_app():
         2. Handle time queries (`DATEADD`, `DATEDIFF`), NULLs, and incomplete data.  
         3. Ensure Snowflake syntax, proper aggregation (`SUM`, `COUNT`), and `GROUP BY`.  
         4. Optimize queries, avoid unnecessary joins/subqueries, and use aliases.  
-        5. **NEVER use `ORDER BY` inside `UNION` subqueries** – remove them entirely.
+        5. **NEVER use `ORDER BY` before `UNION`. Instead, use `ORDER BY` inside a subquery with `LIMIT`, then select from that subquery.**
         6. Use `DISTINCT` only when necessary.  
         7. Merge multiple queries into one when possible.  
         8. Respond **only with a JSON object** in the following format(never respond in any other format except json):  
