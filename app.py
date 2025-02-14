@@ -26,6 +26,7 @@ def local_css(file_name):
         st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
 
 local_css("style.css")
+
 # Connect to Snowflake
 def get_snowflake_connection():
     return create_engine(URL(
@@ -38,7 +39,6 @@ def get_snowflake_connection():
         role=os.getenv("SNOWFLAKE_ROLE")
     ))
 
-
 # Authenticate user
 def authenticate_user(email, password):
     if not email.endswith("@ahs.com"):
@@ -46,10 +46,45 @@ def authenticate_user(email, password):
 
     engine = get_snowflake_connection()
     with engine.connect() as conn:
-        query = text("SELECT COUNT(*) FROM UandP WHERE username = :email AND password = :password")
+        query = text("SELECT COUNT(*) FROM UserPasswordName WHERE username = :email AND password = :password")
         result = conn.execute(query, {"email": email, "password": password}).fetchone()
         return result[0] > 0  # Returns True if user exists, False otherwise
 
+# Check if user needs to change password
+def needs_password_change(email):
+    engine = get_snowflake_connection()
+    with engine.connect() as conn:
+        query = text("SELECT initial FROM UserPasswordName WHERE username = :email")
+        result = conn.execute(query, {"email": email}).fetchone()
+        return result[0] if result else False
+
+# Update password in Snowflake
+def update_password(email, new_password):
+    engine = get_snowflake_connection()
+    with engine.connect() as conn:
+        query = text("UPDATE UserPasswordName SET password = :new_password, initial = FALSE WHERE username = :email")
+        conn.execute(query, {"new_password": new_password, "email": email})
+        conn.commit()
+
+# Password Change Page
+def password_change_page():
+    st.title("🔐 Change Password")
+    email = st.session_state["user"]
+    current_password = st.text_input("Current Password", type="password", placeholder="Enter your current password")
+    new_password = st.text_input("New Password", type="password", placeholder="Enter your new password")
+    confirm_password = st.text_input("Confirm New Password", type="password", placeholder="Confirm your new password")
+
+    if st.button("Change Password"):
+        if authenticate_user(email, current_password):
+            if new_password == confirm_password:
+                update_password(email, new_password)
+                st.success("Password changed successfully!")
+                st.session_state["password_changed"] = True
+                st.rerun()
+            else:
+                st.error("New passwords do not match!")
+        else:
+            st.error("Incorrect current password!")
 
 # Login Page
 def login_page():
@@ -66,18 +101,23 @@ def login_page():
         else:
             st.error("Invalid credentials! Please try again.")
 
-
 # Main Application
 def main_app():
     with st.sidebar:
         logo = Image.open("logo.png")  # Replace with your logo (500x500px)
         st.image(logo, width=200)
         st.markdown("""
-        **❄️ Snowflake Data Assistant**  
-        *Powered by Groq & Streamlit*  
-        Version 1.0  
-        [Learn More](#) | [Documentation](#)
+        ❄️ Snowflake Data Assistant
+        Powered by Groq & Streamlit
+        Version 1.0
+        Learn More | Documentation
         """)
+
+        # Logout button
+        if st.button("Logout"):
+            st.session_state["authenticated"] = False
+            st.session_state["user"] = None
+            st.rerun()
 
         # Token usage stats
         st.divider()
@@ -97,22 +137,22 @@ def main_app():
     )
 
     # System prompt (from main.py)
-    react_system_prompt = f"""
-        You are a Snowflake SQL assistant. Use the schema below:  
-        {schema_text}  
-        **STRICT RULES** (Violating these will be considered a failure):
-        1. Use exact table/column names, valid joins, and correct foreign keys.  
-        2. Handle time queries (`DATEADD`, `DATEDIFF`), NULLs, and incomplete data.  
-        3. Ensure Snowflake syntax, proper aggregation (`SUM`, `COUNT`), and `GROUP BY`.  
-        4. Optimize queries, avoid unnecessary joins/subqueries, and use aliases.  
-        5. **NEVER use `ORDER BY` before `UNION`. Instead, use `ORDER BY` inside a subquery with `LIMIT`, then select from that subquery.**
-        6. Use `DISTINCT` only when necessary.  
-        7. Merge multiple queries into one when possible.  
-        8. Respond **only with a JSON object** in the following format(never respond in any other format except json):  
-        {{
-          "function_name": "query_snowflake",
-          "function_parms": {{"query": "<Your SQL Query Here>"}}
-        }}
+    react_system_prompt = f"""  
+        You are a Snowflake SQL assistant. Use the schema below:    
+        {schema_text}    
+        **STRICT RULES** (Violating these will be considered a failure):  
+        1. Use exact table/column names, valid joins, and correct foreign keys.    
+        2. Handle time queries (DATEADD, DATEDIFF), NULLs, and incomplete data.    
+        3. Ensure Snowflake syntax, proper aggregation (SUM, COUNT), and GROUP BY.    
+        4. Optimize queries, avoid unnecessary joins/subqueries, and use aliases.    
+        5. **NEVER use ORDER BY before UNION. Instead, use ORDER BY inside a subquery with LIMIT, then select from that subquery.**  
+        6. Use DISTINCT only when necessary.    
+        7. Merge multiple queries into one when possible.    
+        8. Respond **only with a JSON object** in the following format(never respond in any other format except json):    
+        {{  
+          "function_name": "query_snowflake",  
+          "function_parms": {{"query": "<Your SQL Query Here>"}}  
+        }}  
     """
 
     # Available actions (from main.py)
@@ -296,12 +336,14 @@ def main_app():
             sync_sqlite_to_snowflake()
         st.sidebar.success("Sync completed!")
 
-
 # Run the App
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 if st.session_state["authenticated"]:
-    main_app()
+    if needs_password_change(st.session_state["user"]):
+        password_change_page()
+    else:
+        main_app()
 else:
     login_page()
